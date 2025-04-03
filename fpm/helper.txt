@@ -1,0 +1,11 @@
+[supervisor]
+-installing
+    ->sudo apt install supervisor
+    ->edit if needed and copy laravel-worker.conf to /etc/supervisor/conf.d/laravel-worker.conf
+    ->sudo supervisorctl reread
+    ->sudo supervisorctl update
+    ->sudo supervisorctl start laravel-worker:*
+
+-restarting
+    ->sudo supervisorctl stop laravel-worker:*
+    ->sudo supervisorctl start laravel-worker:*
