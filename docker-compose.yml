@@ -9,7 +9,6 @@ services:
     container_name: split_trip_web
     volumes:
       - ${APP_PATH_HOST}:${APP_PATH_CONTAINER}
-      - ./web/certs:/etc/nginx/certs
     ports:
       - ${WEB_PORT}:80
       - ${WEB_SECURE_PORT}:443
