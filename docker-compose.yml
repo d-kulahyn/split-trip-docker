@@ -30,12 +30,20 @@ services:
       - split_trip
 
   split_trip_redis:
-    image: redis:5
+    # BullMQ (the Nest app's queue) warns on every connection below 6.2 and
+    # relies on server behaviour older versions lack.
+    image: redis:7-alpine
     container_name: split_trip_redis
+    restart: unless-stopped
     ports:
       - ${REDIS_PORT}:6379
     networks:
       - split_trip
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   split_trip_db_pg:
     build:

@@ -1,0 +1,16 @@
+# No certificate for ${API_DOMAIN} yet: serve only the ACME challenge, so
+# certbot can issue the first one. `split-trip-reload` switches to tls.conf
+# as soon as the certificate exists.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${API_DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 503;
+    }
+}

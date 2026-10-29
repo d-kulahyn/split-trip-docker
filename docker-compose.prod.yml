@@ -1,0 +1,105 @@
+# Production infrastructure: the TLS-terminating nginx, certbot, Postgres and
+# Redis. The Nest application (API, worker, migrations) is
+# `../nest/docker-compose.prod.yml` and joins this stack's networks. Step by
+# step: PRODUCTION.md.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Only nginx publishes ports. Two networks: `split_trip_edge` (nginx and the
+# API's processes; it also gives them outbound internet) and
+# `split_trip_backend` (internal — no route out — Postgres, Redis and the
+# application). nginx cannot reach the databases; the databases cannot reach
+# the internet.
+
+services:
+  split_trip_web:
+    build:
+      context: ./web/prod
+    container_name: split_trip_web
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    networks:
+      - split_trip_edge
+
+  # Renews the certificate twice a day when it is due (30 days before expiry);
+  # nginx picks a renewed one up on its next config refresh. The first
+  # certificate is issued by hand — PRODUCTION.md. On the project's default
+  # network: it needs Let's Encrypt and nothing of ours.
+  split_trip_certbot:
+    image: certbot/certbot:v2.11.0
+    container_name: split_trip_certbot
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+
+  split_trip_redis:
+    image: redis:7.4-alpine
+    container_name: split_trip_redis
+    restart: unless-stopped
+    # The password comes from the environment, not the command line, so it
+    # never shows in the rendered command. Through the image's entrypoint, so
+    # it drops to the `redis` user. BullMQ requires `noeviction`: an evicted
+    # job key is a lost push.
+    command: ["sh", "-c", "exec docker-entrypoint.sh redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes --maxmemory-policy noeviction"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - split_trip_backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  split_trip_db_pg:
+    build:
+      context: ./pg
+    container_name: split_trip_db
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-split_trip_nest}
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # The application's own role, created on first start (pg/prod-init).
+      APP_DB_USER: ${APP_DB_USER:?APP_DB_USER is required}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./pg/prod-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - split_trip_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  letsencrypt:
+  certbot_webroot:
+  redis_data:
+  pg_data:
+
+networks:
+  # Named explicitly so `../nest/docker-compose.prod.yml` finds them whatever
+  # the compose project is called.
+  split_trip_edge:
+    name: split_trip_edge
+  split_trip_backend:
+    name: split_trip_backend
+    internal: true
